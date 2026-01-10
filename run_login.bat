@@ -2,7 +2,7 @@
 cd /d %~dp0
 
 :: 等待网卡初始化
-timeout /t 15 /nobreak
+timeout /t 5 /nobreak
 
 :: 记录日志
 echo [Start] %date% %time% >> run_log.txt
@@ -13,4 +13,5 @@ echo [Start] %date% %time% >> run_log.txt
 python auto_login.py >> run_log.txt 2>&1
 
 echo [End] Finished >> run_log.txt
+
 echo ------------------------------------------------ >> run_log.txt
