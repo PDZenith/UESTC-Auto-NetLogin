@@ -1,149 +1,101 @@
-# UESTC Unattended NetLogin (成电无人值守自动联网系统)
+# UESTC Auto NetLogin
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
+面向电子科技大学校园网无人值守 Windows 主机的自动认证与断线恢复工具。它以
+SYSTEM 计划任务运行，在公网已经可用时立即退出；只有确认离线后才启动项目内固定
+版本的 Headless Chrome 登录校园网。
 
-> **Miku Fans 特别版** 🎵  
-> 专为电子科技大学（清水河校区）实验室台式机设计的 **高可用自动联网工具**。
+## 可靠性保护
 
-## 📖 项目简介
+- 使用 Microsoft Connect Test 和备用 204 端点严格判断公网状态。
+- 通过源地址绑定代理访问校园网认证服务器，绕过 Clash/Mihomo TUN 的 Fake-IP
+  和错误路由。
+- 支持当前有线入口 `10.253.0.237` 的动态“校园网登录”按钮，并兼容旧入口。
+- 验证码可见时禁止提交；明确的凭据错误不会循环尝试。
+- 登录后只有重新通过公网探测才记录成功。
+- 文件锁和任务的 `IgnoreNew` 策略共同防止并行登录。
+- Python、Chrome Headless Shell 和 ChromeDriver 均使用项目内固定路径。
+- 计划任务支持开机延迟执行、每分钟巡检、失败重试和四分钟执行上限。
 
-本项目的核心目标是解决 **寒假/长期无人值守** 场景下，实验室电脑因断电、死机重启或误关机后，无法自动通过校园网网页认证（Captive Portal），导致远程控制软件（RayLink/ToDesk/Sunshine）彻底失联的痛点。
-本项目的编程任务是在本人的提示词的指引下，由Google Gemini 2.5 Pro LLM完成。
+## 安全说明
 
-### ✨ 核心特性 (为什么选择它？)
-*   **🛡️ 抗代理干扰**：代码级屏蔽系统代理（Clash/V2Ray）环境变量，防止开机自启时因代理未启动导致连接被拒绝。
-*   **⚡ IP 直连模式**：采用 IP 直连认证服务器策略，绕过开机初期的 DNS 解析延迟与故障，连接成功率极高。
-*   **📦 依赖自包含**：脚本自动下载匹配的 Chrome Headless Shell，**不依赖**系统原本安装的浏览器版本，彻底杜绝 `SessionNotCreated` 报错。
-*   **🔄 智能重试**：内置指数级重试机制，自动等待网卡初始化完成。
+`config.py` 保存校园网账号与密码，并已被 `.gitignore` 排除。不要提交真实凭据、
+运行日志、缓存、备份目录或 `state/`。复制示例文件开始配置：
 
----
+```powershell
+Copy-Item .\config.example.py .\config.py
+```
 
-## 🛠️ 第一步：软件安装与配置
+然后仅在本机编辑 `config.py`：
 
-### 1. 环境准备
-确保你的电脑上安装了 Python (建议 3.8 以上)。
-*   [Python 官网下载](https://www.python.org/downloads/)
-*   *安装时请务必勾选 "Add Python to PATH"*。
+```python
+USER_ID = "your-student-id"
+PASSWORD = "your-campus-network-password"
+```
 
-### 2. 获取代码
-下载本项目（点击右上角绿色的 **Code** -> **Download ZIP**），解压到一个**固定路径**（例如 `D:\Tools\UESTC-NetLogin\`）。
-> **注意：** 解压后请不要随意移动文件夹位置，否则后续的开机自启设置会失效。
+## 安装
 
-### 3. 一键初始化
-进入解压后的文件夹，双击运行 **`setup.py`**（或者在终端运行 `python setup.py`）。
+系统要求：Windows 10/11、Python 3.13，以及管理员 PowerShell。
 
-按照提示操作：
-1.  脚本会自动下载必要的依赖库（Selenium, Requests）。
-2.  脚本会自动下载配套的 Chrome 驱动（约 100MB，需耐心等待）。
-3.  **输入学号和密码**：脚本会生成本地配置文件 `config.py`。
+```powershell
+Set-Location D:\NetLogin
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock
+.\.venv\Scripts\python.exe .\setup.py
+```
 
----
+`setup.py` 会下载配套的 Chrome Headless Shell 与 ChromeDriver
+`133.0.6943.53`。如果 `config.py` 尚不存在，它还会提示创建本地配置。
 
-## ⚙️ 第二步：硬件与系统配置 (至关重要)
+先执行安全探测，它不会读取或提交凭据：
 
-软件装好了只是第一步，要实现真正的无人值守，必须进行以下 BIOS 和 Windows 设置。
+```powershell
+.\run_login.bat --probe-only
+```
 
-### 1. BIOS 基础设置 (断电自动重启)
-*此步骤保证实验室停电再来电后，电脑能自动开机。*
+确认探测成功后，在管理员 PowerShell 注册 SYSTEM Watchdog：
 
-**以 MSI (微星) 主板为例：**
-1.  重启电脑，疯狂按 `Del` 键进入 BIOS。
-2.  按 `F7` 进入 **Advanced Mode** (高级模式)。
-3.  依次进入：`Settings` -> `Advanced` -> `Power Management Setup`。
-4.  找到 **Restore after AC Power Loss**，修改为 **[Power On]**。
-5.  (可选) 找到 **ErP Ready**，修改为 **[Disabled]** (防止网卡断电)。
+```powershell
+.\Install-WatchdogTask.ps1
+```
 
-### 2. BIOS 进阶设置 (防手滑后悔药)
-*此步骤强烈推荐！如果你不小心在 Windows 里点了“关机”，上面的断电重启是不会生效的。此设置可让电脑每天固定时间强制自动开机，作为最后的兜底。*
+安装程序不会主动启动任务或重启计算机。运行日志默认写入
+`D:\NetLogin\run_log.txt`。
 
-1.  在 BIOS 的 `Settings` -> `Advanced` -> `Wake Up Event Setup` (唤醒事件设置) 中。
-2.  找到 **Resume By RTC Alarm** (由 RTC 闹钟唤醒)，修改为 **[Enabled]**。
-3.  **Date (of Month)**: 设置为 **Every Day** (每天)。
-4.  **Time (hh:mm:ss)**: 设置为一个你觉得合适的时间 (例如 `08:00:00`，即每天早上8点自动开机)。
-5.  按 `F10` 保存并重启。
+## Clash/Mihomo TUN
 
-### 3. Windows 系统设置 (防蓝屏卡死)
-*此步骤保证电脑蓝屏后自动重启，而不是停在蓝屏界面发呆。*
+如果 TUN 将校园网认证地址送往代理节点，应在最终 `MATCH,PROXY` 之前添加：
 
-1.  按 `Win + R`，输入 `sysdm.cpl` 回车。
-2.  点击 **“高级”** -> **“启动和故障恢复”** -> **“设置”**。
-3.  在“系统失败”栏目下，**勾选 [x] 自动重新启动**。
+```yaml
+- IP-CIDR,10.253.0.0/16,DIRECT,no-resolve
+```
 
----
+不要仅依赖 `DOMAIN-SUFFIX,uestc.edu.cn,DIRECT`，因为认证入口使用 IP 地址时不会
+命中域名规则。程序自身仍保留源地址绑定作为独立保护。
 
-## 🤖 第三步：配置任务计划 (实现开机自启)
+## 验证与排障
 
-这是最容易出错的一步，请务必严格按照以下步骤配置，否则脚本可能因权限不足而无法运行。
+```powershell
+# 自动测试
+.\.venv\Scripts\python.exe -m pytest -q --import-mode=importlib .\tests\test_my_login.py
 
-1.  按 `Win + S`，搜索 **“任务计划程序”** 并打开。
-2.  点击右侧的 **“创建任务”**。
+# 查看最近日志
+Get-Content .\run_log.txt -Tail 80
 
-#### 👉 [常规] 选项卡
-*   **名称**：任意填写，如 `UESTC_AutoLogin`。
-*   **更改用户或组**：点击按钮，输入 `SYSTEM`，点击检查名称，确定。
-    *   *解释：使用 SYSTEM 账户可以绕过 Windows 密码策略，无需登录桌面即可后台运行。*
-*   **勾选**：**使用最高权限运行**。
+# 检查计划任务
+Get-ScheduledTask -TaskName UESTC-NetLogin-Watchdog
+Get-ScheduledTaskInfo -TaskName UESTC-NetLogin-Watchdog
+```
 
-#### 👉 [触发器] 选项卡
-*   **新建** -> 开始任务：选择 **“启动时”**。
+主要退出码：`0` 成功或已在线，`10` 配置错误，`20` 浏览器资源错误，`30` 无兼容
+入口，`40` 验证码，`41` 凭据拒绝，`42` 提交后未恢复公网，`50` 未预期错误。
 
-#### 👉 [操作] 选项卡
-*   **新建** -> 操作：**启动程序**。
-*   **程序或脚本**：点击浏览，选择本项目文件夹下的 **`run_login.bat`**。
-*   **起始于 (Start in)**：⚠️ **必须填写本项目的绝对路径！**
-    *   例如你的脚本在 `D:\Tools\UESTC-NetLogin\`，这里就填 `D:\Tools\UESTC-NetLogin\`。
-    *   *如果不填，脚本找不到驱动文件，会直接报错退出。*
+## 验证状态
 
-#### 👉 [条件] 选项卡
-*   **取消勾选** “只有在计算机使用交流电源时才启动此任务”。
-*   **取消勾选** “只有在以下网络连接可用时才启动”（让脚本自己处理网络等待，防止系统误判）。
+当前版本已在有线校园网、Clash Verge TUN 开启的条件下完成真实注销与自动恢复：
+程序识别 `.237` 登录页、提交凭据并在首次公网复核时确认恢复。冷启动、BIOS 来电
+开机和具体远程控制软件仍应在目标机器上分别验收。
 
-点击 **确定** 保存。
+## License
 
----
-
-## 🧪 第四步：终极测试 (拔线仪式)
-
-不要以为配置好了就行，必须进行一次实战演习！
-
-1.  **注销网络**：在浏览器访问自助服务平台注销，确保现在处于**断网状态**。
-2.  **关机**。
-3.  **拔掉电源线**：默数 10 秒（模拟寒假停电）。
-4.  **插上电源**：
-    *   **观察 1**：电脑是否**自动启动**？（验证 BIOS 设置）
-    *   **观察 2**：启动后停在锁屏界面，**不要登录，不要动鼠标**。
-    *   **观察 3**：等待约 2-3 分钟。
-    *   **结果**：拿出手机或笔记本，查看 RayLink/ToDesk/Moonlight 是否**自动上线**。
-
-如果设备自动上线，恭喜你！你的远程科研堡垒已经坚不可摧。🎉
-
----
-
-### 📶 关于 Wi-Fi / 路由器用户
-本项目同样适用于连接 Wi-Fi 或通过路由器上网的同学，但请注意以下两点：
-
-1.  **必须勾选“自动连接”**：
-    在 Windows WiFi 列表中，点击你的校园网/路由器 WiFi，务必勾选 **“自动连接”** (Connect automatically)。否则开机后脚本无法通过网络接口发送请求。
-
-2.  **路由器用户的小福利**：
-    如果你的电脑连接的是寝室的个人路由器，当脚本在电脑上运行成功后，**路由器下的所有设备（手机、平板）都会自动拥有网络**，无需再次登录。
-
----
-
-## ❓ 常见问题 (FAQ)
-
-
-**Q: 为什么运行后没有浏览器弹出来？**
-A: 本工具默认运行在 **Headless (无头) 模式**，浏览器在后台静默运行，这是为了配合 SYSTEM 权限使用，属于正常现象。
-
-**Q: 如何查看运行日志？**
-A: 在项目文件夹下会生成一个 `run_log.txt` 文件，里面记录了脚本运行的时间、尝试连接的 IP 以及详细的报错信息。
-
-**Q: 我换了学号/密码怎么办？**
-A: 重新运行 `python setup.py`，或者直接删除 `config.py` 后重新运行脚本即可。
-
----
-
-## 📜 开源协议
-
-MIT License. 本项目仅供学习交流，严禁用于非法用途。
+[MIT](LICENSE)
